@@ -1,0 +1,93 @@
+name: lede
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - '.github/workflows/lede.yml'
+
+jobs:
+  x86:
+    runs-on: ubuntu-latest
+    steps:    
+    - name: Prepare environment.
+      env:
+          DEBIAN_FRONTEND: noninteractive
+      run: |
+        bash <(curl -fsSL https://raw.githubusercontent.com/coderafei/lede/master/prenv.sh)
+
+    - name: Clone source and install
+      run: |
+        git clone https://github.com/coolsnowwolf/lede
+        cd lede
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: Download and Load custom configuration
+      run: |
+        cd lede
+        curl -fsSL https://raw.githubusercontent.com/coderafei/lede/master/.config >.config
+        bash <(curl -fsSL https://raw.githubusercontent.com/coderafei/lede/master/diy.sh)
+        ./scripts/feeds install -a
+        make defconfig
+
+    - name: Download package
+      run: |
+        cd lede
+        make download -j8
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+        sudo df -h
+
+    - name: Multi-core compile
+      run: |
+        cd lede
+        sudo df -h
+        echo -e "$(nproc) thread compile"
+        make -j$(nproc)
+        sudo df -h
+
+    - name: Single-core compile
+      if: failure()
+      run: |
+        sudo df -h
+        cd lede
+        make -j1 V=s
+        sudo df -h
+
+    - name: Upload entire bin directory
+      uses: actions/upload-artifact@master
+      if: always()
+      with:
+        name: LEDE-x86_64-bin-dictionary
+        path: lede/bin
+
+    - name: Only Upload Packages to Main Download Station
+      if: success()
+      run: |
+        cd lede/bin
+        zip -r x86_64-Package.zip . -i *.ipk
+        curl -F "token=${{ secrets.UPLOAD_TOKEN }}" -F "location=Router/LEDE/x86_64/Lean-Package" -F "file=@x86_64-Package.zip" ${{ secrets.MAIN_UPLOAD_PROCESSOR }}
+        curl --socks5 ${{ secrets.PROXY_ADDR }} -U ${{ secrets.PROXY_USER }} -F "token=${{ secrets.UPLOAD_TOKEN }}" -F "location=Router/LEDE/x86_64/Lean-Package" -F "file=@x86_64-Package.zip" ${{ secrets.CN_STATION_PROCESSOR }}
+
+    - name: Setup Upload dictionary
+      if: always()
+      run: |
+        cd lede/bin/targets/*/*
+        rm -rf packages
+        echo "::set-env name=FIRMWARE::$(pwd)"
+
+    - name: Only Upload firmware (Without packages)
+      uses: actions/upload-artifact@master
+      if: always()
+      with:
+        name: x86_64
+        path: ${{ env.FIRMWARE }}
+
+    # - name: Upload firmware to Main Download Station (Without packages)
+    #   if: success()
+    #   run: |
+    #     cd lede/bin/targets/*/*
+    #     zip -r -o x86_64.zip . -i *.gz
+    #     curl -F "token=${{ secrets.UPLOAD_TOKEN }}" -F "location=Router/LEDE/x86_64/Lean" -F "file=@x86_64.zip" ${{ secrets.MAIN_UPLOAD_PROCESSOR }}
+    #     curl --socks5 ${{ secrets.PROXY_ADDR }} -U ${{ secrets.PROXY_USER }} -F "token=${{ secrets.UPLOAD_TOKEN }}" -F "location=Router/LEDE/x86_64/Lean" -F "file=@x86_64.zip" ${{ secrets.CN_STATION_PROCESSOR }}
